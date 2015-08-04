@@ -20,17 +20,6 @@ import io.vamp.core.router_driver._
 
 import scala.language.postfixOps
 
-object DeploymentSynchronizationSchedulerActor extends ActorDescription {
-
-  def props(args: Any*): Props = Props[DeploymentSynchronizationSchedulerActor]
-
-}
-
-class DeploymentSynchronizationSchedulerActor extends SchedulerActor with OperationNotificationProvider {
-
-  def tick() = actorFor(DeploymentSynchronizationActor) ! SynchronizeAll
-}
-
 object DeploymentSynchronizationActor extends ActorDescription {
 
   def props(args: Any*): Props = Props[DeploymentSynchronizationActor]
