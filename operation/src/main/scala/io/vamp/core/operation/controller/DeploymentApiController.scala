@@ -8,25 +8,32 @@ import io.vamp.core.model.artifact._
 import io.vamp.core.model.conversion.DeploymentConversion._
 import io.vamp.core.model.reader._
 import io.vamp.core.operation.deployment.DeploymentActor
-import io.vamp.core.persistence.{ArtifactResponseEnvelope, PersistenceActor}
+import io.vamp.core.persistence.{ArtifactResponseEnvelope, ArtifactShrinkage, PersistenceActor}
 
 import scala.concurrent.Future
 import scala.language.{existentials, postfixOps}
 
-trait DeploymentApiController {
+trait DeploymentApiController extends ArtifactShrinkage {
   this: ActorSupport with FutureSupport with ExecutionContextProvider with NotificationProvider =>
 
-  def deployments(asBlueprint: Boolean, expand: Boolean, shrink: Boolean)(page: Int, perPage: Int)(implicit timeout: Timeout): Future[Any] = (actorFor(PersistenceActor) ? PersistenceActor.AllPaginated(classOf[Deployment], page, perPage, expand, shrink)).map {
+  def deployments(asBlueprint: Boolean, expandReferences: Boolean, onlyReferences: Boolean)(page: Int, perPage: Int)(implicit timeout: Timeout): Future[Any] = (actorFor(PersistenceActor) ? PersistenceActor.AllPaginated(classOf[Deployment], page, perPage, expandReferences, onlyReferences)).map {
     case ArtifactResponseEnvelope(list, _, _, _) => list.map {
-      case deployment: Deployment => if (asBlueprint) deployment.asBlueprint else deployment
+      case deployment: Deployment => transform(deployment, asBlueprint, onlyReferences)
       case any => any
     }
     case any => any
   }
 
-  def deployment(name: String, asBlueprint: Boolean, expand: Boolean, shrink: Boolean)(implicit timeout: Timeout): Future[Any] = (actorFor(PersistenceActor) ? PersistenceActor.Read(name, classOf[Deployment], expand, shrink)).map {
-    case Some(deployment: Deployment) => if (asBlueprint) deployment.asBlueprint else deployment
+  def deployment(name: String, asBlueprint: Boolean, expandReferences: Boolean, onlyReferences: Boolean)(implicit timeout: Timeout): Future[Any] = (actorFor(PersistenceActor) ? PersistenceActor.Read(name, classOf[Deployment], expandReferences, onlyReferences)).map {
+    case Some(deployment: Deployment) => transform(deployment, asBlueprint, onlyReferences)
     case any => any
+  }
+
+  private def transform(deployment: Deployment, asBlueprint: Boolean, onlyRef: Boolean) = {
+    if (asBlueprint) {
+      val blueprint = deployment.asBlueprint
+      if (onlyRef) onlyReferences(blueprint) else blueprint
+    } else deployment
   }
 
   def createDeployment(request: String, validateOnly: Boolean)(implicit timeout: Timeout) = DeploymentBlueprintReader.readReferenceFromSource(request) match {

@@ -34,16 +34,16 @@ abstract class AbstractContainerDriver(ec: ExecutionContext) extends ContainerDr
     Extraction.decompose(dialect) merge Extraction.decompose(app)
   }
 
-
-  protected def interpolate(dialect: Any, valueResolver: ValueReference => String) = {
+  protected def interpolate[T](dialect: T, valueResolver: ValueReference => String): T = {
     def visit(any: Any): Any = any match {
       case value: String => resolve(value, valueResolver)
+      case list: List[_] => list.map(visit)
       case map: scala.collection.Map[_, _] => map.map {
         case (key, value) => key -> visit(value)
       }
       case _ => any
     }
 
-    visit(dialect)
+    visit(dialect).asInstanceOf[T]
   }
 }
