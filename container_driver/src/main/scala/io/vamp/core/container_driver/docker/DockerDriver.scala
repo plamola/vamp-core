@@ -26,7 +26,7 @@ class DockerDriver(ec: ExecutionContext) extends AbstractContainerDriver(ec) wit
 
   override protected val nameDelimiter = "_"
 
-  override protected def appId(deployment: Deployment, breed: Breed): String = s"/vamp$nameDelimiter${artifactName2Id(deployment)}$nameDelimiter${artifactName2Id(breed)}"
+  override protected def appId(deploymentName: String, breedName: String): String = s"/vamp$nameDelimiter${artifactName2Id(deploymentName)}$nameDelimiter${artifactName2Id(breedName)}"
 
   private val dockerMinimumMemory = 4 * 1024 * 1024
 
@@ -71,13 +71,14 @@ class DockerDriver(ec: ExecutionContext) extends AbstractContainerDriver(ec) wit
     containerDetails
   }
 
-  def deploy(deployment: Deployment, cluster: DeploymentCluster, service: DeploymentService, update: Boolean) = {
-    val containerName = appId(deployment, service.breed)
+  def deploy(deploymentName: String, breedName: String, service: DeploymentService, environment: Map[String, String], portMappings: List[DockerPortMapping], update: Boolean, valueProvider: ValueReference => String, dialects: Map[Dialect.Value, Any]) = {
+
+    val containerName = appId(deploymentName, breedName)
     findContainerIdInCache(containerName) match {
       case None =>
         logger.info(s"[DEPLOY] Container $containerName does not exist, needs creating")
         validateSchemaSupport(service.breed.deployable.schema, DockerDriver.Schema)
-        createAndStartContainer(containerName, deployment, cluster, service)
+        createAndStartContainer(containerName, environment, portMappings, service, dialects)
 
       case Some(found) if update =>
         logger.info(s"[DEPLOY] Container $containerName already exists, needs updating")
@@ -89,8 +90,8 @@ class DockerDriver(ec: ExecutionContext) extends AbstractContainerDriver(ec) wit
     }
   }
 
-  def undeploy(deployment: Deployment, service: DeploymentService) = {
-    val containerName = appId(deployment, service.breed)
+  def undeploy(deployment: String, breedName: String) = {
+    val containerName = appId(deployment, breedName)
     logger.info(s"docker delete app: $containerName")
     Future(
       findContainerIdInCache(containerName) match {
@@ -143,8 +144,8 @@ class DockerDriver(ec: ExecutionContext) extends AbstractContainerDriver(ec) wit
    * Creates and starts a container
    * If the image is not available, it will be pulled first
    */
-  private def createAndStartContainer(containerName: String, deployment: Deployment, cluster: DeploymentCluster, service: DeploymentService): Future[_] = async {
-    val dialect: Map[Any, Any] = (cluster.dialects ++ service.dialects).get(Dialect.Docker) match {
+    private def createAndStartContainer(containerName: String, environment: Map[String, String], portMappings: List[DockerPortMapping], service: DeploymentService, dialects: Map[Dialect.Value, Any]): Future[_] = async {
+    val dialect: Map[Any, Any] = dialects.get(Dialect.Docker) match {
       case Some(entry: AnyRef) if entry.isInstanceOf[collection.Map[_, _]] => entry.asInstanceOf[collection.Map[Any, Any]].toMap
       case _ => Map[Any, Any]()
     }
@@ -160,12 +161,12 @@ class DockerDriver(ec: ExecutionContext) extends AbstractContainerDriver(ec) wit
       pullImage(dockerImageName, dialect)
     }
 
-    val response = createDockerContainer(dialect, containerName, dockerImageName, environment(deployment, cluster, service), portMappings(deployment, cluster, service))
+    val response = createDockerContainer(dialect, containerName, dockerImageName, environment, portMappings)
 
     addContainerToCache(containerName, getContainerFromResponseId(response))
     addScale(getContainerFromResponseId(response), service.scale)
 
-    startDockerContainer(dialect, getContainerFromResponseId(response), portMappings(deployment, cluster, service), service.scale).onFailure { case ex =>
+    startDockerContainer(dialect, getContainerFromResponseId(response), portMappings, service.scale).onFailure { case ex =>
       logger.debug(s"Failed to start docker container: $ex")
       logger.trace(s"${ex.getStackTrace.mkString("\n")}")
     }

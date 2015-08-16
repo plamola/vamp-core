@@ -3,6 +3,7 @@ package io.vamp.core.container_driver.marathon
 import com.typesafe.scalalogging.Logger
 import io.vamp.common.http.RestClient
 import io.vamp.core.container_driver._
+import io.vamp.core.container_driver.docker.DockerPortMapping
 import io.vamp.core.container_driver.marathon.api.{Docker, _}
 import io.vamp.core.container_driver.notification.UndefinedMarathonApplication
 import io.vamp.core.model.artifact._
@@ -31,15 +32,17 @@ class MarathonDriver(ec: ExecutionContext, url: String) extends AbstractContaine
     logger.debug(s"marathon get all")
     RestClient.get[Apps](s"$url/v2/apps?embed=apps.tasks").map(apps => apps.apps.filter(app => processable(app.id)).map(app => containerService(app)))
   }
-
-  def deploy(deployment: Deployment, cluster: DeploymentCluster, service: DeploymentService, update: Boolean) = {
+  
+  def deploy(deploymentName: String, breedName: String, service: DeploymentService, environment: Map[String, String], portMappings: List[DockerPortMapping], update: Boolean, valueProvider: ValueReference => String, dialects: Map[Dialect.Value, Any]) = {
     validateSchemaSupport(service.breed.deployable.schema, MarathonDriver.Schema)
 
-    val id = appId(deployment, service.breed)
+    val id = appId(deploymentName, breedName)
     if (update) logger.info(s"marathon update app: $id") else logger.info(s"marathon create app: $id")
 
-    val app = MarathonApp(id, container(deployment, cluster, service), service.scale.get.instances, service.scale.get.cpu, service.scale.get.memory, environment(deployment, cluster, service), cmd(deployment, cluster, service))
-    val payload = requestPayload(deployment, cluster, service, app)
+  val app = MarathonApp(id, container(portMappings, service), service.scale.get.instances, service.scale.get.cpu, service.scale.get.memory, environment, cmd(service))
+    val dialect  = dialects.getOrElse(Dialect.Marathon, Map.empty)
+    val interPolatedDialect = interpolate(dialect, valueProvider)
+    val payload = requestPayload(app, interPolatedDialect)
 
     if (update)
       RestClient.put[Any](s"$url/v2/apps/${app.id}", payload)
@@ -47,34 +50,27 @@ class MarathonDriver(ec: ExecutionContext, url: String) extends AbstractContaine
       RestClient.post[Any](s"$url/v2/apps", payload)
   }
 
-  private def container(deployment: Deployment, cluster: DeploymentCluster, service: DeploymentService): Option[Container] = service.breed.deployable match {
-    case Deployable(schema, Some(definition)) if MarathonDriver.Schema.Docker.toString.compareToIgnoreCase(schema) == 0 => Some(Container(Docker(definition, portMappings(deployment, cluster, service))))
+  private def container(portMappings: List[DockerPortMapping], service: DeploymentService): Option[Container] = service.breed.deployable match {
+    case Deployable(schema, Some(definition)) if MarathonDriver.Schema.Docker.toString.compareToIgnoreCase(schema) == 0 => Some(Container(Docker(definition, portMappings)))
     case _ => None
   }
 
-  private def cmd(deployment: Deployment, cluster: DeploymentCluster, service: DeploymentService): Option[String] = service.breed.deployable match {
+  private def cmd(service: DeploymentService): Option[String] = service.breed.deployable match {
     case Deployable(schema, Some(definition)) if MarathonDriver.Schema.Cmd.toString.compareToIgnoreCase(schema) == 0 || MarathonDriver.Schema.Command.toString.compareToIgnoreCase(schema) == 0 => Some(definition)
     case _ => None
   }
 
-  private def requestPayload(deployment: Deployment, cluster: DeploymentCluster, service: DeploymentService, app: MarathonApp) = {
-    val (local, dialect) = (cluster.dialects.get(Dialect.Marathon), service.dialects.get(Dialect.Marathon)) match {
-      case (_, Some(d)) => Some(service) -> d
-      case (Some(d), None) => None -> d
-      case _ => None -> Map()
-    }
-
+  private def requestPayload(app: MarathonApp, dialect: Any) = {
     (app.container, app.cmd, dialect) match {
       case (None, None, map: Map[_, _]) if map.asInstanceOf[Map[String, _]].get("cmd").nonEmpty =>
       case (None, None, _) => throwException(UndefinedMarathonApplication)
       case _ =>
     }
-
-    mergeWithDialect(deployment, local, app, dialect)
+    mergeWithDialect(dialect, app)
   }
 
-  def undeploy(deployment: Deployment, service: DeploymentService) = {
-    val id = appId(deployment, service.breed)
+  def undeploy(deployment: String, breed: String) = {
+    val id = appId(deployment, breed)
     logger.info(s"marathon delete app: $id")
     RestClient.delete(s"$url/v2/apps/$id")
   }

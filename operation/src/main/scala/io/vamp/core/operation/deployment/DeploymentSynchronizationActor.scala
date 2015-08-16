@@ -9,9 +9,10 @@ import akka.pattern.ask
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
 import io.vamp.common.notification.NotificationErrorException
+import io.vamp.core.container_driver.docker.DockerPortMapping
 import io.vamp.core.container_driver.{ContainerDriverActor, ContainerServer, ContainerService}
-import io.vamp.core.model.artifact.DeploymentService._
 import io.vamp.core.model.artifact._
+import io.vamp.core.model.artifact.DeploymentService._
 import io.vamp.core.model.resolver.DeploymentTraitResolver
 import io.vamp.core.operation.deployment.DeploymentSynchronizationActor.{Synchronize, SynchronizeAll}
 import io.vamp.core.operation.notification.{DeploymentServiceError, InternalServerError, OperationNotificationProvider}
@@ -39,9 +40,25 @@ object DeploymentSynchronizationActor extends ActorDescription {
 
   case class Synchronize(deployment: Deployment)
 
+  def environment(deployment: Deployment, cluster: DeploymentCluster, service: DeploymentService): Map[String, String] =
+    service.breed.environmentVariables.map({ ev =>
+      val name = ev.alias.getOrElse(ev.name)
+      val value = deployment.environmentVariables.find(e => TraitReference(cluster.name, TraitReference.EnvironmentVariables, ev.name).toString == e.name).get.interpolated.get
+      name -> value
+    }).toMap
+
+  def portMappings(deployment: Deployment, cluster: DeploymentCluster, service: DeploymentService): List[DockerPortMapping] = {
+    service.breed.ports.map(port =>
+      port.value match {
+        case Some(_) => DockerPortMapping(port.number)
+        case None => DockerPortMapping(deployment.ports.find(p => TraitReference(cluster.name, TraitReference.Ports, port.name).toString == p.name).get.number)
+      })
+  }
+
 }
 
 class DeploymentSynchronizationActor extends CommonSupportForActors with DeploymentTraitResolver with OperationNotificationProvider {
+  import DeploymentSynchronizationActor._
 
   private object Processed {
 
@@ -152,11 +169,20 @@ class DeploymentSynchronizationActor extends CommonSupportForActors with Deploym
       DeploymentServer(server.name, server.host, ports.toMap, server.deployed)
     }
 
+    def updateDeployment(): Unit = deploy(true)
+    def deploy(update: Boolean = false): Unit = {
+      val env = environment(deployment, deploymentCluster, deploymentService)
+      val ports = portMappings(deployment, deploymentCluster, deploymentService)
+      val valueProvider = valueFor(deployment, Some(deploymentService)) _
+      val dialects = deploymentCluster.dialects ++ deploymentService.dialects
+      actorFor(ContainerDriverActor) ! ContainerDriverActor.Deploy(deployment.name, deploymentService.breed.name, deploymentService, env, ports, update, valueProvider, dialects)
+    }
+
     containerService(deployment, deploymentService, containerServices) match {
       case None =>
         if (hasDependenciesDeployed(deployment, deploymentCluster, deploymentService)) {
           if (hasResolvedEnvironmentVariables(deployment, deploymentCluster, deploymentService)) {
-            actorFor(ContainerDriverActor) ! ContainerDriverActor.Deploy(deployment, deploymentCluster, deploymentService, update = false)
+            deploy()
             ProcessedService(Processed.Ignore, deploymentService)
           } else {
             ProcessedService(Processed.ResolveEnvironmentVariables, deploymentService)
@@ -167,7 +193,7 @@ class DeploymentSynchronizationActor extends CommonSupportForActors with Deploym
 
       case Some(cs) =>
         if (!matchingScale(deploymentService, cs)) {
-          actorFor(ContainerDriverActor) ! ContainerDriverActor.Deploy(deployment, deploymentCluster, deploymentService, update = true)
+          updateDeployment()
           ProcessedService(Processed.Ignore, deploymentService)
         } else if (!matchingServers(deploymentService, cs)) {
           ProcessedService(Processed.Persist, deploymentService.copy(servers = cs.servers.map(convert)))
@@ -224,7 +250,7 @@ class DeploymentSynchronizationActor extends CommonSupportForActors with Deploym
         case None =>
           ProcessedService(Processed.RemoveFromPersistence, deploymentService)
         case Some(cs) =>
-          actorFor(ContainerDriverActor) ! ContainerDriverActor.Undeploy(deployment, deploymentService)
+          actorFor(ContainerDriverActor) ! ContainerDriverActor.Undeploy(deployment.name, deploymentService.breed.name)
           ProcessedService(Processed.Ignore, deploymentService)
       }
     } else {
@@ -233,7 +259,7 @@ class DeploymentSynchronizationActor extends CommonSupportForActors with Deploym
   }
 
   private def containerService(deployment: Deployment, deploymentService: DeploymentService, containerServices: List[ContainerService]): Option[ContainerService] =
-    containerServices.find(_.matching(deployment, deploymentService.breed))
+    containerServices.find(_.matching(deployment.name, deploymentService.breed.name))
 
   private def matchingServers(deploymentService: DeploymentService, containerService: ContainerService) =
     deploymentService.servers.size == containerService.servers.size && deploymentService.servers.forall(server => containerService.servers.exists(_.name == server.name) && server.deployed)
