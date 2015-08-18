@@ -21,8 +21,8 @@ case class DefaultBlueprint(name: String, clusters: List[Cluster], endpoints: Li
 case class BlueprintReference(name: String) extends Blueprint with Reference
 
 object Dialect extends Enumeration {
-
   val Marathon, Docker = Value
+  def asValue(name: String): Option[Dialect.Value] = values.find( _.toString.toLowerCase == name.toLowerCase )
 }
 
 abstract class AbstractCluster extends Artifact {

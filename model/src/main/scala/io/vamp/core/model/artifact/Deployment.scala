@@ -26,6 +26,15 @@ trait DeploymentState {
 
 case class Deployment(name: String, clusters: List[DeploymentCluster], endpoints: List[Port], ports: List[Port], environmentVariables: List[EnvironmentVariable], hosts: List[Host]) extends AbstractBlueprint {
   lazy val traits = ports ++ environmentVariables ++ hosts
+  private lazy val environmentVariablesMap: Map[String, EnvironmentVariable] = environmentVariables.map(env => env.name -> env)(scala.collection.breakOut)
+  def getVariable(variableName: String): Option[EnvironmentVariable] = environmentVariablesMap.get(variableName)
+  def variableIsResolved(variableName: String): Boolean = getVariable(variableName).exists(_.isResolved)
+  def allServices: List[DeploymentService] = clusters.flatMap(_.services)
+  def isDependencyDeployed(breed: Breed): Boolean =
+    allServices.exists(deploymentService => deploymentService.breed.name == breed.name && deploymentService.state.isInstanceOf[DeploymentService.Deployed])
+  def areDependenciesDeployed(breeds: Iterable[Breed]): Boolean =
+    breeds.forall(isDependencyDeployed)
+
 }
 
 case class DeploymentCluster(name: String, services: List[DeploymentService], sla: Option[Sla], routes: Map[Int, Int] = Map(), dialects: Map[Dialect.Value, Any] = Map()) extends AbstractCluster

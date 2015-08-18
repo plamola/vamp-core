@@ -15,10 +15,7 @@ object DialectSerializer {
   })).getBytes(StandardCharsets.UTF_8)
 
   def deserialize(blob: Array[Byte]): Map[Dialect.Value, Any] = {
-    val map = read[Any](new String(blob, StandardCharsets.UTF_8)).asInstanceOf[Map[String, Any]]
-    Dialect.values.toList.flatMap(dialect => map.get(dialect.toString.toLowerCase) match {
-      case None => Nil
-      case Some(entry) => (dialect -> entry) :: Nil
-    }).toMap
+    val dialects = read[Any](new String(blob, StandardCharsets.UTF_8)).asInstanceOf[Map[String, Any]]
+    dialects.map{ case (k,v) => Dialect.asValue(k) -> v}.collect{ case (Some(k), v) => k -> v}
   }
 }

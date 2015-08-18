@@ -13,7 +13,6 @@ import io.vamp.core.container_driver.{ContainerDriverActor, ContainerServer, Con
 import io.vamp.core.model.artifact.DeploymentService._
 import io.vamp.core.model.artifact._
 import io.vamp.core.model.resolver.DeploymentTraitResolver
-import io.vamp.core.operation.deployment.DeploymentSynchronizationActor.{Synchronize, SynchronizeAll}
 import io.vamp.core.operation.notification.{DeploymentServiceError, InternalServerError, OperationNotificationProvider}
 import io.vamp.core.persistence.{PaginationSupport, PersistenceActor}
 import io.vamp.core.router_driver._
@@ -27,10 +26,6 @@ object DeploymentSynchronizationActor extends ActorDescription {
   object SynchronizeAll
 
   case class Synchronize(deployment: Deployment)
-
-}
-
-class DeploymentSynchronizationActor extends PaginationSupport with CommonSupportForActors with DeploymentTraitResolver with OperationNotificationProvider {
 
   private object Processed {
 
@@ -53,6 +48,11 @@ class DeploymentSynchronizationActor extends PaginationSupport with CommonSuppor
   private case class ProcessedService(state: Processed.State, service: DeploymentService)
 
   private case class ProcessedCluster(state: Processed.State, cluster: DeploymentCluster, processedServices: List[ProcessedService])
+}
+
+class DeploymentSynchronizationActor extends PaginationSupport with CommonSupportForActors with DeploymentTraitResolver with OperationNotificationProvider {
+  import DeploymentSynchronizationActor._
+  import GraphConverters._
 
   def receive: Receive = {
 
@@ -75,7 +75,7 @@ class DeploymentSynchronizationActor extends PaginationSupport with CommonSuppor
       case success =>
         val deploymentRoutes = success.asInstanceOf[DeploymentRoutes]
         val containerServices = offload(actorFor(ContainerDriverActor) ? ContainerDriverActor.All).asInstanceOf[List[ContainerService]]
-        deployments.filterNot(withError).foreach(synchronize(containerServices, deploymentRoutes))
+        deployments.filterNot(withError).foreach(synchronize(containerServices, deploymentRoutes)(_))
     }
   }
 
@@ -110,29 +110,29 @@ class DeploymentSynchronizationActor extends PaginationSupport with CommonSuppor
     })
   }
 
-  private def synchronize(containerServices: List[ContainerService], deploymentRoutes: DeploymentRoutes): (Deployment => Unit) = { (deployment: Deployment) =>
+  private def synchronize(containerServices: List[ContainerService], deploymentRoutes: DeploymentRoutes): (DeploymentNode => Unit) = { (deployment: DeploymentNode) =>
     val processedClusters = deployment.clusters.map { deploymentCluster =>
       val processedServices = deploymentCluster.services.map { deploymentService =>
         deploymentService.state match {
           case ReadyForDeployment(_) =>
-            readyForDeployment(deployment, deploymentCluster, deploymentService, containerServices, deploymentRoutes.clusterRoutes)
+            readyForDeployment(deploymentService, containerServices, deploymentRoutes.clusterRoutes)
 
           case Deployed(_) =>
-            deployed(deployment, deploymentCluster, deploymentService, containerServices, deploymentRoutes.clusterRoutes)
+            deployed(deploymentService, containerServices, deploymentRoutes.clusterRoutes)
 
           case ReadyForUndeployment(_) =>
-            readyForUndeployment(deployment, deploymentCluster, deploymentService, containerServices, deploymentRoutes.clusterRoutes)
+            readyForUndeployment(deploymentService, containerServices, deploymentRoutes.clusterRoutes)
 
           case _ =>
             ProcessedService(Processed.Ignore, deploymentService)
         }
       }
-      processServiceResults(deployment, deploymentCluster, deploymentRoutes.clusterRoutes, processedServices)
+      processServiceResults(deploymentCluster, deploymentRoutes.clusterRoutes, processedServices)
     }
     processClusterResults(deployment, processedClusters, deploymentRoutes.endpointRoutes)
   }
 
-  private def readyForDeployment(deployment: Deployment, deploymentCluster: DeploymentCluster, deploymentService: DeploymentService, containerServices: List[ContainerService], clusterRoutes: List[ClusterRoute]): ProcessedService = {
+  private def readyForDeployment(deploymentService: DeploymentServiceNode, containerServices: List[ContainerService], clusterRoutes: List[ClusterRoute]): ProcessedService = {
     def convert(server: ContainerServer): DeploymentServer = {
       val ports = for {
         dp <- deploymentService.breed.ports.map(_.number)
@@ -141,11 +141,11 @@ class DeploymentSynchronizationActor extends PaginationSupport with CommonSuppor
       DeploymentServer(server.name, server.host, ports.toMap, server.deployed)
     }
 
-    containerService(deployment, deploymentService, containerServices) match {
+    containerService(deploymentService, containerServices) match {
       case None =>
-        if (hasDependenciesDeployed(deployment, deploymentCluster, deploymentService)) {
-          if (hasResolvedEnvironmentVariables(deployment, deploymentCluster, deploymentService)) {
-            actorFor(ContainerDriverActor) ! ContainerDriverActor.Deploy(deployment, deploymentCluster, deploymentService, update = false)
+        if (deploymentService.hasDependenciesDeployed) {
+          if (deploymentService.hasEnvironmentVariablesResolved) {
+            actorFor(ContainerDriverActor) ! ContainerDriverActor.Deploy(deploymentService.deploymentCluster.deployment, deploymentService.deploymentCluster, deploymentService, update = false)
             ProcessedService(Processed.Ignore, deploymentService)
           } else {
             ProcessedService(Processed.ResolveEnvironmentVariables, deploymentService)
@@ -156,14 +156,14 @@ class DeploymentSynchronizationActor extends PaginationSupport with CommonSuppor
 
       case Some(cs) =>
         if (!matchingScale(deploymentService, cs)) {
-          actorFor(ContainerDriverActor) ! ContainerDriverActor.Deploy(deployment, deploymentCluster, deploymentService, update = true)
+          actorFor(ContainerDriverActor) ! ContainerDriverActor.Deploy(deploymentService.deploymentCluster.deployment, deploymentService.deploymentCluster, deploymentService, update = true)
           ProcessedService(Processed.Ignore, deploymentService)
         } else if (!matchingServers(deploymentService, cs)) {
-          ProcessedService(Processed.Persist, deploymentService.copy(servers = cs.servers.map(convert)))
+          ProcessedService(Processed.Persist, deploymentService.service.copy(servers = cs.servers.map(convert)))
         } else {
-          val ports = outOfSyncPorts(deployment, deploymentCluster, deploymentService, clusterRoutes)
+          val ports = outOfSyncPorts(deploymentService, clusterRoutes)
           if (ports.isEmpty) {
-            ProcessedService(Processed.Persist, deploymentService.copy(state = new DeploymentService.Deployed))
+            ProcessedService(Processed.Persist, deploymentService.service.copy(state = new DeploymentService.Deployed))
           } else {
             ProcessedService(Processed.UpdateRoute(ports), deploymentService)
           }
@@ -171,33 +171,20 @@ class DeploymentSynchronizationActor extends PaginationSupport with CommonSuppor
     }
   }
 
-  private def hasDependenciesDeployed(deployment: Deployment, deploymentCluster: DeploymentCluster, deploymentService: DeploymentService) = {
-    deploymentService.breed.dependencies.forall({ case (n, d) =>
-      deployment.clusters.flatMap(_.services).find(s => s.breed.name == d.name) match {
-        case None => false
-        case Some(service) => service.state.isInstanceOf[DeploymentService.Deployed]
-      }
-    })
-  }
-
-  private def hasResolvedEnvironmentVariables(deployment: Deployment, deploymentCluster: DeploymentCluster, deploymentService: DeploymentService) = {
-    deploymentService.breed.environmentVariables.count(_ => true) == deploymentService.environmentVariables.count(_ => true) && deploymentService.environmentVariables.forall(_.interpolated.isDefined)
-  }
-
-  private def deployed(deployment: Deployment, deploymentCluster: DeploymentCluster, deploymentService: DeploymentService, containerServices: List[ContainerService], routes: List[ClusterRoute]): ProcessedService = {
+  private def deployed(deploymentService: DeploymentServiceNode, containerServices: List[ContainerService], routes: List[ClusterRoute]): ProcessedService = {
     def redeploy() = {
-      val ds = deploymentService.copy(state = new ReadyForDeployment())
-      readyForDeployment(deployment, deploymentCluster, ds, containerServices, routes)
+      val ds = deploymentService.copy(service = deploymentService.service.copy(state = new ReadyForDeployment()))
+      readyForDeployment(ds, containerServices, routes)
       ProcessedService(Processed.Persist, ds)
     }
 
-    containerService(deployment, deploymentService, containerServices) match {
+    containerService(deploymentService, containerServices) match {
       case None => redeploy()
       case Some(cs) =>
         if (!matchingServers(deploymentService, cs) || !matchingScale(deploymentService, cs)) {
           redeploy()
         } else {
-          val ports = outOfSyncPorts(deployment, deploymentCluster, deploymentService, routes)
+          val ports = outOfSyncPorts(deploymentService, routes)
           if (ports.isEmpty) {
             ProcessedService(Processed.Ignore, deploymentService)
           } else {
@@ -207,13 +194,13 @@ class DeploymentSynchronizationActor extends PaginationSupport with CommonSuppor
     }
   }
 
-  private def readyForUndeployment(deployment: Deployment, deploymentCluster: DeploymentCluster, deploymentService: DeploymentService, containerServices: List[ContainerService], routes: List[ClusterRoute]): ProcessedService = {
-    if (deploymentService.breed.ports.forall({ port => clusterRouteService(deployment, deploymentCluster, deploymentService, port, routes).isEmpty })) {
-      containerService(deployment, deploymentService, containerServices) match {
+  private def readyForUndeployment(deploymentService: DeploymentServiceNode, containerServices: List[ContainerService], routes: List[ClusterRoute]): ProcessedService = {
+    if (deploymentService.breed.ports.forall({ port => clusterRouteService(deploymentService, port, routes).isEmpty })) {
+      containerService(deploymentService, containerServices) match {
         case None =>
           ProcessedService(Processed.RemoveFromPersistence, deploymentService)
         case Some(cs) =>
-          actorFor(ContainerDriverActor) ! ContainerDriverActor.Undeploy(deployment, deploymentService)
+          actorFor(ContainerDriverActor) ! ContainerDriverActor.Undeploy(deploymentService.deploymentCluster.deployment, deploymentService)
           ProcessedService(Processed.Ignore, deploymentService)
       }
     } else {
@@ -221,8 +208,8 @@ class DeploymentSynchronizationActor extends PaginationSupport with CommonSuppor
     }
   }
 
-  private def containerService(deployment: Deployment, deploymentService: DeploymentService, containerServices: List[ContainerService]): Option[ContainerService] =
-    containerServices.find(_.matching(deployment, deploymentService.breed))
+  private def containerService(deploymentService: DeploymentServiceNode, containerServices: List[ContainerService]): Option[ContainerService] =
+    containerServices.find(_.matching(deploymentService.deploymentCluster.deployment, deploymentService.breed))
 
   private def matchingServers(deploymentService: DeploymentService, containerService: ContainerService) =
     deploymentService.servers.size == containerService.servers.size && deploymentService.servers.forall(server => containerService.servers.exists(_.name == server.name) && server.deployed)
@@ -230,9 +217,9 @@ class DeploymentSynchronizationActor extends PaginationSupport with CommonSuppor
   private def matchingScale(deploymentService: DeploymentService, containerService: ContainerService) =
     containerService.servers.size == deploymentService.scale.get.instances && containerService.scale.cpu == deploymentService.scale.get.cpu && containerService.scale.memory == deploymentService.scale.get.memory
 
-  private def outOfSyncPorts(deployment: Deployment, deploymentCluster: DeploymentCluster, deploymentService: DeploymentService, clusterRoutes: List[ClusterRoute]): List[Port] = {
+  private def outOfSyncPorts(deploymentService: DeploymentServiceNode, clusterRoutes: List[ClusterRoute]): List[Port] = {
     deploymentService.breed.ports.filter({ port =>
-      clusterRouteService(deployment, deploymentCluster, deploymentService, port, clusterRoutes) match {
+      clusterRouteService(deploymentService, port, clusterRoutes) match {
         case None => true
         case Some(routeService) => !matching(deploymentService, routeService)
       }
@@ -258,16 +245,16 @@ class DeploymentSynchronizationActor extends PaginationSupport with CommonSuppor
     matchingServers && matchingServersWeight && matchingFilters
   }
 
-  private def clusterRouteService(deployment: Deployment, deploymentCluster: DeploymentCluster, deploymentService: DeploymentService, port: Port, clusterRoutes: List[ClusterRoute]): Option[RouteService] =
-    clusterRoutes.find(_.matching(deployment, deploymentCluster, port)) match {
+  private def clusterRouteService(deploymentService: DeploymentServiceNode, port: Port, clusterRoutes: List[ClusterRoute]): Option[RouteService] =
+    clusterRoutes.find(_.matching(deploymentService.deploymentCluster.deployment, deploymentService.deploymentCluster, port)) match {
       case None => None
       case Some(route) => route.services.find(_.matching(deploymentService))
     }
 
-  private def processServiceResults(deployment: Deployment, deploymentCluster: DeploymentCluster, clusterRoutes: List[ClusterRoute], processedServices: List[ProcessedService]): ProcessedCluster = {
+  private def processServiceResults(deploymentCluster: DeploymentClusterNode, clusterRoutes: List[ClusterRoute], processedServices: List[ProcessedService]): ProcessedCluster = {
 
     val processedCluster = if (processedServices.exists(s => s.state == Processed.Persist || s.state == Processed.RemoveFromPersistence || s.state == Processed.ResolveEnvironmentVariables)) {
-      val dc = deploymentCluster.copy(services = processedServices.filter(_.state != Processed.RemoveFromPersistence).map(_.service))
+      val dc = deploymentCluster.copy(cluster = deploymentCluster.cluster.copy(services = processedServices.filter(_.state != Processed.RemoveFromPersistence).map(_.service)))
       val state = if (dc.services.isEmpty) Processed.RemoveFromPersistence
       else {
         if (processedServices.exists(s => s.state == Processed.ResolveEnvironmentVariables)) Processed.ResolveEnvironmentVariables else Processed.Persist
@@ -286,9 +273,9 @@ class DeploymentSynchronizationActor extends PaginationSupport with CommonSuppor
     if (ports.nonEmpty) {
       val cluster = processedCluster.cluster.copy(services = processedServices.filter(_.state != Processed.RemoveFromRoute).map(_.service))
       if (cluster.services.nonEmpty)
-        ports.foreach(port => actorFor(RouterDriverActor) ! RouterDriverActor.Create(deployment, cluster, port, update = clusterRoutes.exists(_.matching(deployment, deploymentCluster, port))))
+        ports.foreach(port => actorFor(RouterDriverActor) ! RouterDriverActor.Create(deploymentCluster.deployment, cluster, port, update = clusterRoutes.exists(_.matching(deploymentCluster.deployment, deploymentCluster, port))))
       else
-        ports.foreach(port => actorFor(RouterDriverActor) ! RouterDriverActor.Remove(deployment, cluster, port))
+        ports.foreach(port => actorFor(RouterDriverActor) ! RouterDriverActor.Remove(deploymentCluster.deployment, cluster, port))
     }
 
     processedCluster
