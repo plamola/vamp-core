@@ -6,6 +6,7 @@ import com.typesafe.config.ConfigFactory
 import io.vamp.common.akka.ActorDescription
 import io.vamp.common.http.HttpServerBaseActor
 import io.vamp.core.model.serialization.CoreSerializationFormat
+import io.vamp.core.persistence.PersistenceActorProvider
 import io.vamp.core.rest_api.notification.RestApiNotificationProvider
 import org.json4s.Formats
 
@@ -18,7 +19,7 @@ object HttpServerActor extends ActorDescription {
   def props(args: Any*): Props = Props[HttpServerActor]
 }
 
-class HttpServerActor extends HttpServerBaseActor with RestApiRoute with RestApiNotificationProvider {
+class HttpServerActor extends HttpServerBaseActor with RestApiRoute with RestApiNotificationProvider with PersistenceActorProvider {
 
   implicit val timeout = HttpServerActor.timeout
 

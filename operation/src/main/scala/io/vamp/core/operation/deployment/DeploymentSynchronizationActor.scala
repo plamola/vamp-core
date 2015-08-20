@@ -15,7 +15,7 @@ import io.vamp.core.model.artifact._
 import io.vamp.core.model.resolver.DeploymentTraitResolver
 import io.vamp.core.operation.deployment.DeploymentSynchronizationActor.{Synchronize, SynchronizeAll}
 import io.vamp.core.operation.notification.{DeploymentServiceError, InternalServerError, OperationNotificationProvider}
-import io.vamp.core.persistence.{PaginationSupport, PersistenceActor}
+import io.vamp.core.persistence.{PersistenceActorProvider, PaginationSupport, PersistenceActor}
 import io.vamp.core.router_driver._
 
 import scala.language.postfixOps
@@ -41,7 +41,7 @@ object DeploymentSynchronizationActor extends ActorDescription {
 
 }
 
-class DeploymentSynchronizationActor extends PaginationSupport with CommonSupportForActors with DeploymentTraitResolver with OperationNotificationProvider {
+class DeploymentSynchronizationActor extends PaginationSupport with CommonSupportForActors with DeploymentTraitResolver with OperationNotificationProvider with PersistenceActorProvider {
 
   private object Processed {
 
@@ -99,7 +99,7 @@ class DeploymentSynchronizationActor extends PaginationSupport with CommonSuppor
     def handleTimeout(service: DeploymentService) = {
       val notification = DeploymentServiceError(deployment, service)
       reportException(notification)
-      actorFor(PersistenceActor) ! PersistenceActor.Update(deployment.copy(clusters = deployment.clusters.map(cluster => cluster.copy(services = cluster.services.map({ s =>
+      persistenceActor ! PersistenceActor.Update(deployment.copy(clusters = deployment.clusters.map(cluster => cluster.copy(services = cluster.services.map({ s =>
         if (s.breed.name == service.breed.name) {
           s.copy(state = Error(notification))
         } else s
@@ -396,9 +396,9 @@ class DeploymentSynchronizationActor extends PaginationSupport with CommonSuppor
       val clusters = deployment.clusters.filterNot(cluster => remove.exists(_.name == cluster.name)).map(cluster => persist.find(_.name == cluster.name).getOrElse(cluster))
 
       if (clusters.isEmpty)
-        actorFor(PersistenceActor) ! PersistenceActor.Delete(deployment.name, classOf[Deployment])
+        persistenceActor ! PersistenceActor.Delete(deployment.name, classOf[Deployment])
       else
-        actorFor(PersistenceActor) ! PersistenceActor.Update(deployment.copy(clusters = clusters))
+        persistenceActor ! PersistenceActor.Update(deployment.copy(clusters = clusters))
     }
   }
 }

@@ -1,12 +1,12 @@
 package io.vamp.core.operation.workflow
 
-import akka.actor.ActorRefFactory
+import akka.actor.{ActorRef, ActorRefFactory}
 import io.vamp.core.model.workflow.ScheduledWorkflow
 import io.vamp.core.operation.controller.DeploymentApiController
 
 import scala.concurrent.ExecutionContext
 
-class DeploymentApiContext(implicit scheduledWorkflow: ScheduledWorkflow, ec: ExecutionContext, arf: ActorRefFactory) extends ApiContext with DeploymentApiController {
+class DeploymentApiContext(val persistenceActor: ActorRef)(implicit scheduledWorkflow: ScheduledWorkflow, ec: ExecutionContext, arf: ActorRefFactory) extends ApiContext with DeploymentApiController {
 
   def all() = serialize {
     allPages(deployments(asBlueprint = false, expandReferences = true, onlyReferences = false))

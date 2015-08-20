@@ -6,7 +6,7 @@ import io.vamp.common.akka._
 import io.vamp.core.model.event.Event
 import io.vamp.core.model.workflow.{DeploymentTrigger, EventTrigger, ScheduledWorkflow, TimeTrigger}
 import io.vamp.core.operation.notification._
-import io.vamp.core.persistence.{ArtifactSupport, PaginationSupport, PersistenceActor}
+import io.vamp.core.persistence.{PersistenceActorProvider, ArtifactSupport, PaginationSupport, PersistenceActor}
 import io.vamp.core.pulse.Percolator.{RegisterPercolator, UnregisterPercolator}
 import io.vamp.core.pulse.PulseActor
 
@@ -24,7 +24,7 @@ object WorkflowSchedulerActor extends ActorDescription {
 
 }
 
-class WorkflowSchedulerActor extends WorkflowQuartzScheduler with WorkflowExecutor with PaginationSupport with ArtifactSupport with CommonSupportForActors with OperationNotificationProvider {
+class WorkflowSchedulerActor extends WorkflowQuartzScheduler with PersistenceActorProvider with WorkflowExecutor with PaginationSupport with ArtifactSupport with CommonSupportForActors with OperationNotificationProvider {
 
   import WorkflowSchedulerActor._
 

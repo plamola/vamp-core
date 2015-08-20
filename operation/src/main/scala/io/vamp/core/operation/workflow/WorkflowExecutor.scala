@@ -6,7 +6,7 @@ import akka.actor.{Actor, ActorLogging}
 import io.vamp.common.akka.{ActorSupport, ExecutionContextProvider, FutureSupport}
 import io.vamp.core.model.artifact.Deployment
 import io.vamp.core.model.workflow._
-import io.vamp.core.persistence.{ArtifactSupport, PersistenceActor}
+import io.vamp.core.persistence.{PersistenceActorProvider, ArtifactSupport, PersistenceActor}
 import jdk.nashorn.api.scripting.NashornScriptEngineFactory
 
 import scala.collection.Set
@@ -14,7 +14,7 @@ import scala.concurrent.Future
 import scala.io.Source
 
 trait WorkflowExecutor {
-  this: Actor with ActorLogging with ArtifactSupport with ActorSupport with FutureSupport with ExecutionContextProvider =>
+  this: Actor with ActorLogging with ArtifactSupport with ActorSupport with FutureSupport with ExecutionContextProvider with PersistenceActorProvider =>
 
   private val urlPattern = "^(https?:\\/\\/.+)$".r
 
@@ -74,10 +74,10 @@ trait WorkflowExecutor {
     bindings.put("vamp", new InfoContext(actorRefFactory))
 
     List("breeds", "blueprints", "slas", "scales", "escalations", "routings", "filters", "workflows", "scheduled-workflows").map { group =>
-      bindings.put(group.replace('-', '_'), new ArtifactApiContext(group))
+      bindings.put(group.replace('-', '_'), new ArtifactApiContext(group, persistenceActor))
     }
 
-    bindings.put("deployments", new DeploymentApiContext)
+    bindings.put("deployments", new DeploymentApiContext(persistenceActor))
   }
 
   private def addScheduledWorkflowBindings(scheduledWorkflow: ScheduledWorkflow, bindings: Bindings, data: Any) = {
@@ -102,7 +102,7 @@ trait WorkflowExecutor {
   private def postEvaluation(scheduledWorkflow: ScheduledWorkflow, bindings: Bindings) = {
     bindings.get("storage") match {
       case storage: StorageContext =>
-        actorFor(PersistenceActor) ! PersistenceActor.Update(scheduledWorkflow.copy(storage = storage.all()))
+        persistenceActor ! PersistenceActor.Update(scheduledWorkflow.copy(storage = storage.all()))
       case _ =>
     }
   }

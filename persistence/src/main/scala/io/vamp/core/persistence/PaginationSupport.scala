@@ -11,10 +11,10 @@ import scala.concurrent.Future
 
 
 trait PaginationSupport {
-  this: NotificationProvider with ActorSupport with FutureSupport =>
+  this: NotificationProvider with ActorSupport with FutureSupport with PersistenceProvider =>
 
   def allArtifacts(`type`: Class[_ <: Artifact])(implicit timeout: Timeout) = allPages((page: Int, perPage: Int) => {
-    actorFor(PersistenceActor) ? PersistenceActor.All(`type`, page, perPage)
+    persistenceActor ? PersistenceActor.All(`type`, page, perPage)
   })
 
   def allPages(perPage: (Int, Int) => Future[Any])(implicit timeout: Timeout) = {

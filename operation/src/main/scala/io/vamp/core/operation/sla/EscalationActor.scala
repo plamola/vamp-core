@@ -11,7 +11,7 @@ import io.vamp.core.model.event.{Event, EventQuery, TimeRange}
 import io.vamp.core.model.notification.{DeEscalate, Escalate, SlaEvent}
 import io.vamp.core.operation.notification.{InternalServerError, OperationNotificationProvider, UnsupportedEscalationType}
 import io.vamp.core.operation.sla.EscalationActor.EscalationProcessAll
-import io.vamp.core.persistence.{PaginationSupport, PersistenceActor}
+import io.vamp.core.persistence.{PersistenceActorProvider, PaginationSupport, PersistenceActor}
 import io.vamp.core.pulse.PulseActor
 
 import scala.concurrent.duration.FiniteDuration
@@ -54,7 +54,7 @@ object EscalationActor extends ActorDescription {
 
 }
 
-class EscalationActor extends PaginationSupport with CommonSupportForActors with OperationNotificationProvider {
+class EscalationActor extends PaginationSupport with CommonSupportForActors with OperationNotificationProvider with PersistenceActorProvider {
 
   def tags = Set("escalation")
 
@@ -138,7 +138,7 @@ class EscalationActor extends PaginationSupport with CommonSupportForActors with
   private def scaleEscalation(deployment: Deployment, cluster: DeploymentCluster, escalation: ScaleEscalation[_], escalate: Boolean): Boolean = {
     def commit(targetCluster: DeploymentCluster, scale: DefaultScale) = {
       // Scale only the first service.
-      actorFor(PersistenceActor) ! PersistenceActor.Update(deployment.copy(clusters = deployment.clusters.map(c => {
+      persistenceActor ! PersistenceActor.Update(deployment.copy(clusters = deployment.clusters.map(c => {
         if (c.name == targetCluster.name)
           c.copy(services = c.services match {
             case head :: tail => head.copy(scale = Some(scale), state = ReadyForDeployment()) :: tail

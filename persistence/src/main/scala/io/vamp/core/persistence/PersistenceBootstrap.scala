@@ -17,14 +17,15 @@ class PersistenceExtension(system: ActorSystem) extends Extension {
     ActorSupport.actorOf(ElasticsearchPersistenceInitializationActor) ! Start
 
   private val persistenceDriver = ActorSupport.actorOf(persistenceDescription)
-  val persistenceActor = ActorSupport.actorOf(ArchivePersistenceActor, persistenceDescription) ! Start
+  val persistenceActor: ActorRef = ActorSupport.actorOf(ArchivePersistenceActor, persistenceDescription)
 
-  // Only here to keep same functionality, but it essentially does nothing.
+  // Following lines are only here to keep same functionality, but it essentially does nothing.
+  persistenceActor ! Start
   sys.addShutdownHook {
     if (persistenceDescription == ElasticsearchPersistenceActor)
       ActorSupport.actorFor(ElasticsearchPersistenceInitializationActor) ! Shutdown
 
-    ActorSupport.actorFor(PersistenceActor) ! Shutdown
+    persistenceActor ! Shutdown
   }
 }
 
@@ -33,7 +34,10 @@ object PersistenceExtension extends ExtensionId[PersistenceExtension] with Exten
   override def createExtension(system: ExtendedActorSystem) = new PersistenceExtension(system)
 }
 
-trait PersistenceActorProvider { this: Actor =>
-  val persistenceActor = PersistenceExtension(context.system).persistenceActor
+trait PersistenceProvider {
+  def persistenceActor: ActorRef
 }
 
+trait PersistenceActorProvider extends PersistenceProvider { this: Actor =>
+  val persistenceActor = PersistenceExtension(context.system).persistenceActor
+}

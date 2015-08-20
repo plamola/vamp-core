@@ -9,7 +9,7 @@ import akka.pattern.ask
 import scala.reflect._
 
 trait ArtifactSupport {
-  this: FutureSupport with ActorSupport with NotificationProvider =>
+  this: FutureSupport with ActorSupport with NotificationProvider with PersistenceProvider =>
 
   def artifactFor[T <: Artifact : ClassTag](artifact: Option[Artifact]): Option[T] = artifact match {
     case None => None
@@ -23,7 +23,7 @@ trait ArtifactSupport {
 
   def artifactFor[T <: Artifact : ClassTag](name: String): T = {
     implicit val timeout = PersistenceActor.timeout
-    offload(actorFor(PersistenceActor) ? PersistenceActor.Read(name, classTag[T].runtimeClass.asInstanceOf[Class[Artifact]])) match {
+    offload(persistenceActor ? PersistenceActor.Read(name, classTag[T].runtimeClass.asInstanceOf[Class[Artifact]])) match {
       case Some(artifact: T) => artifact
       case _ => throwException(ArtifactNotFound(name, classTag[T].runtimeClass))
     }

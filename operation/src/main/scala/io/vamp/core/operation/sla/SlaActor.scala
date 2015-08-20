@@ -12,7 +12,7 @@ import io.vamp.core.model.event.{Aggregator, Event, EventQuery, TimeRange, _}
 import io.vamp.core.model.notification.{DeEscalate, Escalate, SlaEvent}
 import io.vamp.core.operation.notification._
 import io.vamp.core.operation.sla.SlaActor.SlaProcessAll
-import io.vamp.core.persistence.{PaginationSupport, PersistenceActor}
+import io.vamp.core.persistence.{PersistenceActorProvider, PaginationSupport, PersistenceActor}
 import io.vamp.core.pulse.PulseActor
 import io.vamp.core.pulse.PulseActor.Publish
 import io.vamp.core.router_driver.DefaultRouterDriverNameMatcher
@@ -39,7 +39,7 @@ object SlaActor extends ActorDescription {
 
 }
 
-class SlaActor extends SlaPulse with PaginationSupport with CommonSupportForActors with OperationNotificationProvider {
+class SlaActor extends SlaPulse with PaginationSupport with CommonSupportForActors with OperationNotificationProvider with PersistenceActorProvider{
 
   def receive: Receive = {
     case SlaProcessAll =>

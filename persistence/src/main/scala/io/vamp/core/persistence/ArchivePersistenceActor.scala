@@ -1,6 +1,6 @@
 package io.vamp.core.persistence
 
-import akka.actor.Props
+import akka.actor.{ActorRef, Props}
 import akka.pattern.ask
 import io.vamp.common.akka._
 import io.vamp.common.notification.NotificationErrorException
@@ -17,23 +17,23 @@ object ArchivePersistenceActor extends ActorDescription {
   def props(args: Any*): Props = Props(classOf[ArchivePersistenceActor], args: _*)
 }
 
-class ArchivePersistenceActor(target: ActorDescription) extends DecoratorPersistenceActor(target) {
+class ArchivePersistenceActor(persistenceActor: ActorRef) extends DecoratorPersistenceActor(persistenceActor) {
 
   override protected def infoMap() = Map("archive" -> true)
 
-  override protected def create(artifact: Artifact, source: Option[String], ignoreIfExists: Boolean) = offload(actorFor(target) ? Create(artifact, source, ignoreIfExists)) match {
+  override protected def create(artifact: Artifact, source: Option[String], ignoreIfExists: Boolean) = offload(persistenceActor ? Create(artifact, source, ignoreIfExists)) match {
     case a: Artifact => archiveCreate(a, source)
     case e: NotificationErrorException => throw e
     case other => throwException(PersistenceOperationFailure(other))
   }
 
-  override protected def update(artifact: Artifact, source: Option[String], create: Boolean) = offload(actorFor(target) ? Update(artifact, source, create)) match {
+  override protected def update(artifact: Artifact, source: Option[String], create: Boolean) = offload(persistenceActor ? Update(artifact, source, create)) match {
     case a: Artifact => if (create) archiveCreate(a, source) else archiveUpdate(a, source)
     case e: NotificationErrorException => throw e
     case other => throwException(PersistenceOperationFailure(other))
   }
 
-  override protected def delete(name: String, `type`: Class[_ <: Artifact]) = offload(actorFor(target) ? Delete(name, `type`)) match {
+  override protected def delete(name: String, `type`: Class[_ <: Artifact]) = offload(persistenceActor ? Delete(name, `type`)) match {
     case a: Artifact => archiveDelete(a)
     case e: NotificationErrorException => throw e
     case other => throwException(PersistenceOperationFailure(other))

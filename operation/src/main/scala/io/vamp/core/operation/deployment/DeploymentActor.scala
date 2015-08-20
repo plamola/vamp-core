@@ -16,7 +16,7 @@ import io.vamp.core.model.reader.{BlueprintReader, BreedReader}
 import io.vamp.core.model.resolver.DeploymentTraitResolver
 import io.vamp.core.operation.notification._
 import io.vamp.core.persistence.notification.PersistenceOperationFailure
-import io.vamp.core.persistence.{ArtifactSupport, PaginationSupport, PersistenceActor}
+import io.vamp.core.persistence.{PersistenceActorProvider, ArtifactSupport, PaginationSupport, PersistenceActor}
 
 import scala.language.{existentials, postfixOps}
 
@@ -40,7 +40,7 @@ object DeploymentActor extends ActorDescription {
 
 }
 
-class DeploymentActor extends CommonReplyActor with BlueprintSupport with DeploymentValidator with DeploymentMerger with DeploymentSlicer with DeploymentUpdate with ArtifactSupport with PaginationSupport with OperationNotificationProvider {
+class DeploymentActor extends CommonReplyActor with BlueprintSupport with DeploymentValidator with DeploymentMerger with DeploymentSlicer with DeploymentUpdate with ArtifactSupport with PersistenceActorProvider with PaginationSupport with OperationNotificationProvider {
 
   import DeploymentActor._
 
@@ -73,7 +73,7 @@ class DeploymentActor extends CommonReplyActor with BlueprintSupport with Deploy
     if (validateOnly) deployment
     else {
       implicit val timeout: Timeout = PersistenceActor.timeout
-      offload(actorFor(PersistenceActor) ? PersistenceActor.Update(deployment, Some(source), create = create)) match {
+      offload(persistenceActor ? PersistenceActor.Update(deployment, Some(source), create = create)) match {
         case persisted: Deployment =>
           actorFor(DeploymentSynchronizationActor) ! Synchronize(persisted)
           persisted
@@ -403,27 +403,27 @@ trait DeploymentSlicer extends DeploymentOperation {
 }
 
 trait DeploymentUpdate {
-  this: DeploymentValidator with ActorSupport with FutureSupport =>
+  this: DeploymentValidator with ActorSupport with FutureSupport with PersistenceActorProvider =>
 
   private implicit val timeout = PersistenceActor.timeout
 
   def updateSla(deployment: Deployment, cluster: DeploymentCluster, sla: Option[Sla], source: String) = {
     val clusters = deployment.clusters.map(c => if (cluster.name == c.name) c.copy(sla = sla) else c)
-    offload(actorFor(PersistenceActor) ? PersistenceActor.Update(deployment.copy(clusters = clusters), Some(source)))
+    offload(persistenceActor ? PersistenceActor.Update(deployment.copy(clusters = clusters), Some(source)))
     sla
   }
 
   def updateScale(deployment: Deployment, cluster: DeploymentCluster, service: DeploymentService, scale: DefaultScale, source: String) = {
     lazy val services = cluster.services.map(s => if (s.breed.name == service.breed.name) service.copy(scale = Some(scale), state = ReadyForDeployment()) else s)
     val clusters = deployment.clusters.map(c => if (c.name == cluster.name) c.copy(services = services) else c)
-    offload(actorFor(PersistenceActor) ? PersistenceActor.Update(deployment.copy(clusters = clusters), Some(source)))
+    offload(persistenceActor ? PersistenceActor.Update(deployment.copy(clusters = clusters), Some(source)))
     scale
   }
 
   def updateRouting(deployment: Deployment, cluster: DeploymentCluster, service: DeploymentService, routing: DefaultRouting, source: String) = {
     lazy val services = cluster.services.map(s => if (s.breed.name == service.breed.name) service.copy(routing = Some(routing), state = ReadyForDeployment()) else s)
     val clusters = deployment.clusters.map(c => if (c.name == cluster.name) c.copy(services = services) else c)
-    offload(actorFor(PersistenceActor) ? PersistenceActor.Update(validateRoutingWeights(deployment.copy(clusters = clusters)), Some(source)))
+    offload(persistenceActor ? PersistenceActor.Update(validateRoutingWeights(deployment.copy(clusters = clusters)), Some(source)))
     routing
   }
 }

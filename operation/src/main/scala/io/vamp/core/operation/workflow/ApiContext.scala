@@ -5,13 +5,13 @@ import io.vamp.common.akka.{ActorSupport, ExecutionContextProvider, FutureSuppor
 import io.vamp.core.model.serialization.CoreSerializationFormat
 import io.vamp.core.model.workflow.ScheduledWorkflow
 import io.vamp.core.operation.notification.OperationNotificationProvider
-import io.vamp.core.persistence.{PaginationSupport, PersistenceActor}
+import io.vamp.core.persistence.{PersistenceProvider, PaginationSupport, PersistenceActor}
 import org.json4s.Formats
 
 import scala.concurrent.ExecutionContext
 
 abstract class ApiContext(implicit scheduledWorkflow: ScheduledWorkflow, ec: ExecutionContext, arf: ActorRefFactory)
-  extends ScriptingContext with PaginationSupport with ActorSupport with FutureSupport with ExecutionContextProvider with OperationNotificationProvider {
+  extends ScriptingContext with PaginationSupport with ActorSupport with FutureSupport with ExecutionContextProvider with OperationNotificationProvider with PersistenceProvider {
 
   implicit def actorRefFactory = arf
 

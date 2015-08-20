@@ -4,7 +4,7 @@ import _root_.io.vamp.common.akka.{ActorSupport, ExecutionContextProvider, Futur
 import _root_.io.vamp.common.notification.NotificationProvider
 import _root_.io.vamp.core.model.workflow.{DefaultWorkflow, ScheduledWorkflow, TimeTrigger, Workflow}
 import _root_.io.vamp.core.operation.notification.{InconsistentArtifactName, InvalidTimeTriggerError, MissingRequiredVariableError, UnexpectedArtifact}
-import _root_.io.vamp.core.persistence.{ArtifactSupport, PersistenceActor}
+import _root_.io.vamp.core.persistence.{PersistenceProvider, ArtifactSupport, PersistenceActor}
 import akka.pattern.ask
 import akka.util.Timeout
 import io.vamp.core.model.artifact._
@@ -17,7 +17,7 @@ import scala.language.{existentials, postfixOps}
 import scala.reflect._
 
 trait ArtifactApiController extends ArtifactSupport {
-  this: ActorSupport with FutureSupport with ExecutionContextProvider with NotificationProvider =>
+  this: ActorSupport with FutureSupport with ExecutionContextProvider with NotificationProvider with PersistenceProvider =>
 
   def allArtifacts(artifact: String, expandReferences: Boolean, onlyReferences: Boolean)(page: Int, perPage: Int)(implicit timeout: Timeout): Future[Any] = mapping.get(artifact) match {
     case Some(controller) => controller.all(page, perPage, expandReferences, onlyReferences)
@@ -76,26 +76,26 @@ trait ArtifactApiController extends ArtifactSupport {
 
     val `type` = classTag[T].runtimeClass.asInstanceOf[Class[_ <: Artifact]]
 
-    override def all(page: Int, perPage: Int, expandReferences: Boolean, onlyReferences: Boolean)(implicit timeout: Timeout) =
-      actorFor(PersistenceActor) ? PersistenceActor.All(`type`, page, perPage, expandReferences, onlyReferences)
+    override def all(page: Int, perPage: Int, expandReferences: Boolean, onlyReferences: Boolean)(implicit timeout: Timeout) = 
+      persistenceActor ? PersistenceActor.All(`type`, page, perPage, expandReferences, onlyReferences)
 
     override def create(source: String, validateOnly: Boolean)(implicit timeout: Timeout) = {
       val artifact = (unmarshal andThen validate)(source)
-      if (validateOnly) Future(artifact) else actorFor(PersistenceActor) ? PersistenceActor.Create(artifact, Some(source))
+      if (validateOnly) Future(artifact) else persistenceActor ? PersistenceActor.Create(artifact, Some(source))
     }
 
-    override def read(name: String, expandReferences: Boolean, onlyReferences: Boolean)(implicit timeout: Timeout) = actorFor(PersistenceActor) ? PersistenceActor.Read(name, `type`, expandReferences, onlyReferences)
+    override def read(name: String, expandReferences: Boolean, onlyReferences: Boolean)(implicit timeout: Timeout) = persistenceActor ? PersistenceActor.Read(name, `type`, expandReferences, onlyReferences)
 
     override def update(name: String, source: String, validateOnly: Boolean)(implicit timeout: Timeout) = {
       val artifact = (unmarshal andThen validate)(source)
       if (name != artifact.name)
         throwException(InconsistentArtifactName(name, artifact))
 
-      if (validateOnly) Future(artifact) else actorFor(PersistenceActor) ? PersistenceActor.Update(artifact, Some(source))
+      if (validateOnly) Future(artifact) else persistenceActor ? PersistenceActor.Update(artifact, Some(source))
     }
 
     override def delete(name: String, validateOnly: Boolean)(implicit timeout: Timeout) =
-      if (validateOnly) Future(None) else actorFor(PersistenceActor) ? PersistenceActor.Delete(name, `type`)
+      if (validateOnly) Future(None) else persistenceActor ? PersistenceActor.Delete(name, `type`)
 
     protected def unmarshal: (String => T) = { (source: String) => unmarshaller.read(source) }
 
